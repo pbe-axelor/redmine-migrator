@@ -352,97 +352,115 @@ while (!empty($users['users'])) {
 
 //
 // Get the list of issues
-// FIXME: Only does 100 issues, does not page through the entire project.
-//
+$offsetIssues = 0;
 $issues = $source->issue->all([
     'limit'         => 100,
     'sort'          => 'id',
     'project_id'    => $source_project_id,
+    'status_id'	    => '*'
 ]);
-# print_r($issues);
 
-foreach ($issues['issues'] as $issue) {
-    print "Processing issue ID " . $issue['id'] . ', ' . $issue['subject'] . ', Status: ' . $issue['status']['name'] . "\n";
+while (!empty($issues['issues'])) {
 
-    // Don't process the same issue twice.
-    if (! empty($config['issue_map'][$issue['id']])) {
-        print "Already processed -- continuing.\n";
-        continue;
-    }
+  foreach ($issues['issues'] as $issue) {
+      print "Processing issue ID " . $issue['id'] . ', ' . $issue['subject'] . ', Status: ' . $issue['status']['name'] . "\n";
 
-    // If you just wanted to try one issue you could find the issue ID and put it in here.
-    // if ($issue['id'] != 174) {
-    //     continue;
-    // }
+      // Don't process the same issue twice.
+      if (! empty($config['issue_map'][$issue['id']])) {
+          print "Already processed -- continuing.\n";
+          continue;
+      }
 
-    // Get the issue data
-    $issue_data = $source->issue->show($issue['id'], ['include' => 'attachments,journals']);
-    $issue_data = $issue_data['issue'];
+      // If you just wanted to try one issue you could find the issue ID and put it in here.
+      // if ($issue['id'] != 174) {
+      //     continue;
+      // }
 
-    // echo "\nSource Issue Data\n=================\n\n";
-    // print_r($issue_data);
+      // Get the issue data
+      $issue_data = $source->issue->show($issue['id'], ['include' => 'attachments,journals']);
+      $issue_data = $issue_data['issue'];
 
-    // Create a new issue on the destination server
-    $create_attributes = [
-        'project_id'        => $dest_project_id,
-        'tracker_id'        => $config['tracker_map'][$issue_data['tracker']['id']],
-        'status_id'         => $config['status_map'][$issue_data['status']['id']],
-        'priority_id'       => $config['priority_map'][$issue_data['priority']['id']],
-        'subject'           => $issue_data['subject'],
-        'description'       => $issue_data['description'],
-        'assigned_to_id'    => $config['user_map'][$issue_data['assigned_to']['id']],
-        'author_id'         => $config['user_map'][$issue_data['author']['id']],
-    ];
-    if (! empty($issue_data['estimated_hours'])) {
-        $create_attributes['estimated_hours'] = $issue_data['estimated_hours'];
-    }
+      // echo "\nSource Issue Data\n=================\n\n";
+      // print_r($issue_data);
+      // print_r($config['user_map'][$issue_data['author']['id']]);
+      // print_r($userNameMap);
 
-    // echo "\nDestination Issue Data\n======================\n\n";
-    // print_r($create_attributes);
+      // Create a new issue on the destination server
+      $create_attributes = [
+          'project_id'        => $dest_project_id,
+          'tracker_id'        => $config['tracker_map'][$issue_data['tracker']['id']],
+          'status_id'         => $config['status_map'][$issue_data['status']['id']],
+          'priority_id'       => $config['priority_map'][$issue_data['priority']['id']],
+          'subject'           => $issue_data['subject'],
+          'description'       => $issue_data['description'],
+          'assigned_to_id'    => $config['user_map'][$issue_data['assigned_to']['id']],
+          'author_id'         => $config['user_map'][$issue_data['author']['id']],
+      ];
+      if (! empty($issue_data['estimated_hours'])) {
+          $create_attributes['estimated_hours'] = $issue_data['estimated_hours'];
+      }
 
-    // Switch user and create the destination issue
-    $dest->setImpersonateUser($userNameMap[$create_attributes['author_id']]);
-    $postResult = $dest->issue->create($create_attributes);
-    $dest->setImpersonateUser();
+      // echo "\nDestination Issue Data\n======================\n\n";
+      // print_r($create_attributes);
 
-    // echo "\nPOST Results\n============\n\n";
-    // print_r($postResult);
-    /** @var int $new_issue_id */
-    $new_issue_id = $postResult->id;
-    echo "New issue $new_issue_id created.\n";
+      // Switch user and create the destination issue
+      $dest->setImpersonateUser($userNameMap[$create_attributes['author_id']]);
+      $postResult = $dest->issue->create($create_attributes);
+      $dest->setImpersonateUser();
 
-    // Add this to the issue map
-    $config['issue_map'][$issue['id']] = $new_issue_id;
-    file_put_contents($config_file, json_encode($config, JSON_PRETTY_PRINT));
+      // echo "\nPOST Results\n============\n\n";
+      // print_r($postResult);
+      /** @var int $new_issue_id */
+      $new_issue_id = $postResult->id;
+      echo "New issue $new_issue_id created.\n";
 
-    // Go through all of the journals and add the notes.  At this stage I'm not really interested
-    // in journals that don't have notes (e.g. status changes).
-    if (! empty($issue_data['journals'])) {
-        foreach ($issue_data['journals'] as $journal) {
-            if (empty($journal['notes'])) {
-                continue;
-            }
-            $private_note = false;
-            $dest->issue->addNoteToIssue($new_issue_id, $journal['notes'], $private_note);
-            echo "Note added to issue.\n";
-        }
-    }
+      // Add this to the issue map
+      $config['issue_map'][$issue['id']] = $new_issue_id;
+      file_put_contents($config_file, json_encode($config, JSON_PRETTY_PRINT));
 
-    // Go through all of the attachments and add them ot the destination server
-    if (! empty($issue_data['attachments'])) {
-        foreach ($issue_data['attachments'] as $attachment) {
-            $file_content = $source->attachment->download($attachment['id']);
-            // To upload a file + attach it to an existing issue with $issueId
-            $upload = json_decode($dest->attachment->upload($file_content));
-            $dest->issue->attach($new_issue_id, [
-                'token'         => $upload->upload->token,
-                'filename'      => $attachment['filename'],
-                'description'   => $attachment['description'],
-            ]);
-            echo "Attachment added to issue.\n";
-        }
-    }
+      // Go through all of the journals and add the notes.  At this stage I'm not really interested
+      // in journals that don't have notes (e.g. status changes).
+      if (! empty($issue_data['journals'])) {
+          foreach ($issue_data['journals'] as $journal) {
+              if (empty($journal['notes'])) {
+                  continue;
+              }
+              $private_note = false;
+              $dest->setImpersonateUser($userNameMap[$config['user_map'][$journal['user']['id']]]);
+              $dest->issue->addNoteToIssue($new_issue_id, $journal['notes'], $private_note);
+              $dest->setImpersonateUser();
+              echo "Note added to issue.\n";
+          }
+      }
+
+      // Go through all of the attachments and add them ot the destination server
+      if (! empty($issue_data['attachments'])) {
+          foreach ($issue_data['attachments'] as $attachment) {
+              $file_content = $source->attachment->download($attachment['id']);
+              // To upload a file + attach it to an existing issue with $issueId
+              $upload = json_decode($dest->attachment->upload($file_content));
+              $dest->issue->attach($new_issue_id, [
+                  'token'         => $upload->upload->token,
+                  'filename'      => $attachment['filename'],
+                  'description'   => $attachment['description'],
+              ]);
+              echo "Attachment added to issue.\n";
+          }
+      }
+  }
+
+  $offsetIssues = $offsetIssues + 100;
+  $issues = $source->issue->all([
+      'limit'         => 100,
+      'sort'          => 'id',
+      'project_id'    => $source_project_id,
+      'status_id'	    => '*',
+      'offset'	      => $offsetIssues
+  ]);
+
 }
+
+
 
 /////////////////////////////////////////////////////////////////////////////////////
 //
