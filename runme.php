@@ -326,10 +326,22 @@ $dest_project_id = $config['project_map'][$source_project_id];
 //
 // Get destination server user ID to username mapping, required for setImpersonateUser()
 //
-$users = $dest->user->all();
+$users = $dest->user->all([
+  'limit'         => 100
+]);
 $userNameMap = [];
-foreach ($users['users'] as $user) {
-    $userNameMap[$user['id']] = $user['login'];
+$offsetUser = 0;
+
+while (!empty($users['users'])) {
+  foreach ($users['users'] as $user) {
+      $userNameMap[$user['id']] = $user['login'];
+  }
+
+  $offsetUser = $offsetUser + 100;
+  $users = $dest->user->all([
+      'limit'         => 100,
+      'offset'	      => $offsetUser
+  ]);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
